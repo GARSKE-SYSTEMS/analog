@@ -15,9 +15,6 @@ var servicesEntries = [];
 var cardHints = []; // To be used by the log parser to provide hints for notable statistics
 
 function submitLog() {
-    const logInput = document.getElementById('log-input');
-    logText = logInput.value.trim();
-
     const logTypeInput = document.getElementById('log-type');
     logType = logTypeInput.value;
 
@@ -25,7 +22,27 @@ function submitLog() {
     servicesEntries = [];
     logHeader = [];
     cardHints = [];
-    
+
+    const logInput = document.getElementById('log-input');
+    logText = logInput.value.trim();
+
+    const logFileInput = document.getElementById('log-file');
+    if (logFileInput.files.length > 0) {
+        const file = logFileInput.files[0];
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            logText = event.target.result.trim();
+            processLog();
+        };
+        reader.readAsText(file);
+        return;
+    } else if(logText.length === 0) {
+        alert('Please provide a log file or paste log text.');
+    }
+    processLog();
+}
+
+function processLog() {
     switch(logType) {
         case 'auth.log':
             processAuthLog();
@@ -39,8 +56,9 @@ function submitLog() {
         default:
             alert('Unsupported log type.');
     }
-
 }
+
+
 
 function processAuthLog() {
     // Sample Line: 2025-06-20T12:59:25.000001+02:00 XXXXXXXXX sshd[XXXXX]: Accepted publickey for XXXXXXXX from XXX.XXX.XXX.XXX port XXXX ssh2: RSA SHA256:XXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -107,43 +125,57 @@ function scanSeverity(){
 
     logEntries.forEach(entry => {
         entry.severity = severityLevels[0]; // Default to lowest severity
-        severityLevels.forEach(level => {
-            if (entry.message.toLowerCase().includes(level)) {
-                entry.severity = level;
+        if (entry.message.toLowerCase().includes("critical")) {
+            entry.severity = 'critical';
+        }
+        if (entry.message.toLowerCase().includes('error') || entry.message.toLowerCase().includes('fail')) {
+            if( entry.severity === 'low') {
+                entry.severity = 'high';
             }
+        }
 
-            if (entry.message.toLowerCase().includes('error') || entry.message.toLowerCase().includes('fail')) {
-                if( entry.severity === 'low') {
-                    entry.severity = 'high';
+        switch(logType) {
+            case "auth.log":
+                // Special cases for auth.log
+                if (entry.message.toLowerCase().includes('root')) {
+                    key = severityLevels.lastIndexOf(entry.severity);
+                    entry.severity = severityLevels[key + 1] || entry.severity;
                 }
-            }
-
-            if (entry.message.toLowerCase().includes('root')) {
-                if (entry.severity === 'low') {
+                break;
+            case "syslog":
+                // Common syslog severity keywords
+                const msg = entry.message.toLowerCase();
+                if (msg.includes('emerg') || msg.includes('panic') || msg.includes('alert') || msg.includes('crit')) {
+                    entry.severity = 'critical';
+                } else if (msg.includes('warn') || msg.includes('warning')) {
                     entry.severity = 'medium';
+                } else if (msg.includes('notice')) {
+                    entry.severity = 'low';
+                } else if (msg.includes('info')) {
+                    entry.severity = 'low';
                 }
-            }
+                break;
+        }
 
-            if (entry.service.toLowerCase() == "systemd-logind") {
-                // Special case for systemd-logind service
-                
-                // New Login Session
-                if (entry.message.toLowerCase().includes("New session")) {
-                    entry.severity = 'high';
-                }
-            }
 
-            if(entry.service.toLowerCase() == "sshd") {
-                // Special case for sshd service
-                if (entry.message.toLowerCase().includes("failed password")) {
-                    entry.severity = 'medium';
-                }
-                if (entry.message.toLowerCase().includes("accepted publickey")) {
-                    entry.severity = 'high';
-                }
+        // Special cases for specific services
+        if (entry.service.toLowerCase() == "systemd-logind") {
+            // Special case for systemd-logind service
+            
+            // New Login Session
+            if (entry.message.toLowerCase().includes("New session")) {
+                entry.severity = 'high';
             }
-
-        });
+        }
+        if(entry.service.toLowerCase() == "sshd") {
+            // Special case for sshd service
+            if (entry.message.toLowerCase().includes("failed password")) {
+                entry.severity = 'medium';
+            }
+            if (entry.message.toLowerCase().includes("accepted publickey")) {
+                entry.severity = 'high';
+            }
+        }
     });
 
     scanServices();
@@ -317,4 +349,36 @@ function inputSearchBar() {
 
     showSearchResults(queryObj);
     
+}
+
+function processSyslog() {
+    // Sample Line: Jun 20 12:34:56 hostname service[pid]: message
+    const logLines = logText.split('\n');
+    logHeader = ['Timestamp', 'Hostname', 'Service', 'Message'];
+
+    logLines.forEach(line => {
+        const parts = line.split(' ');
+        if (parts.length < 2) return; // Skip malformed lines
+
+        const timestamp = parts[0];
+        const hostname = parts[1];
+        let service = parts[2].replace(/\[\d*\]/g, '').replace(/:/g, '');
+        const message = parts.slice(3).join(' ');
+
+        logEntries.push({ timestamp, hostname, service, message });
+    });
+
+    // Create notable statistics
+    cardHints.push({
+        title: 'Unique Services',
+        value: [...new Set(logEntries.map(entry => entry.service))].length,
+    });
+    const errorEvents = logEntries.filter(entry => entry.message.toLowerCase().includes('error'));
+    cardHints.push({ title: 'Error Events', value: errorEvents.length });
+    const warningEvents = logEntries.filter(entry => entry.message.toLowerCase().includes('warn'));
+    cardHints.push({ title: 'Warning Events', value: warningEvents.length });
+    const infoEvents = logEntries.filter(entry => entry.message.toLowerCase().includes('info'));
+    cardHints.push({ title: 'Info Events', value: infoEvents.length });
+
+    scanSeverity();
 }
