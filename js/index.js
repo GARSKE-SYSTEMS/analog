@@ -293,38 +293,39 @@ function output() {
 
 function showSearchResults(query_obj) {
 
-    // query_obj: Key value pair of search key (e.g. service, severity) and value (e.g. sshd, high)
-    const queryKeys = Object.keys(query_obj);
-    const queryValues = queryKeys.map(key => query_obj[key].toLowerCase());
+    // Build query arrays
+    const queryKeys   = Object.keys(query_obj);
+    const queryValues = queryKeys.map(k => query_obj[k].toLowerCase());
 
+    // Copy header
     const searchResultsHeader = document.getElementById('search-header');
-    searchResultsHeader.innerHTML = logTableHeader.innerHTML; // Copy the log table header
+    searchResultsHeader.innerHTML = logTableHeader.innerHTML;
 
-    // Update the search results table
+    // Clear previous results
     const searchResultsBody = document.getElementById('search-results');
-    searchResultsBody.innerHTML = logTableBody.innerHTML; // Copy Log Data
+    searchResultsBody.innerHTML = '';
 
-    // Remove non matching rows only by using the table header and row data
-    // Build an array of header names (lowercased) to find the right column index
-    const headerCells = searchResultsHeader.querySelectorAll('th');
-    const headers = Array.from(headerCells).map(th => th.innerText.toLowerCase());
-    const columnIndices = queryKeys.map(key => headers.indexOf(key));
+    // Map header text to column indices
+    const headerCells   = logTableHeader.querySelectorAll('th');
+    const headers       = Array.from(headerCells).map(th => th.innerText.toLowerCase());
+    const columnIndices = queryKeys.map(k => headers.indexOf(k));
 
     if (columnIndices.includes(-1)) {
-        console.warn(`Header for query keys "${queryKeys}" not found.`);
-    } else {
-        const rows = searchResultsBody.querySelectorAll('tr');
-        rows.forEach(row => {
-            const cells = row.querySelectorAll('td');
-            const isVisible = columnIndices.every((colIndex, i) => {
-                const cell = cells[colIndex];
-                return cell && cell.innerText.toLowerCase().includes(queryValues[i]);
-            });
-            if (!isVisible) {
-                row.remove();
-            }
-        });
+        console.warn(`Missing columns for keys: ${queryKeys}`);
     }
+
+    // Iterate original rows and copy matching ones
+    const originalRows = logTableBody.querySelectorAll('tr');
+    originalRows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        const matches = columnIndices.every((col, i) => {
+            const text = cells[col]?.innerText.toLowerCase() || '';
+            return text.includes(queryValues[i]);
+        });
+        if (matches) {
+            searchResultsBody.appendChild(row.cloneNode(true));
+        }
+    });
 
     searchListModal.show();
 }
