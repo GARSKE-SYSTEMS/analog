@@ -114,7 +114,7 @@ function scanSeverity(){
 
             if (entry.message.toLowerCase().includes('error') || entry.message.toLowerCase().includes('fail')) {
                 if( entry.severity === 'low') {
-                    entry.severity = 'medium';
+                    entry.severity = 'high';
                 }
             }
 
@@ -152,6 +152,7 @@ function scanSeverity(){
 function scanServices() {
     // Scan the log entries for services and their event counts
     const serviceCounts = {};
+    const lowServiceCounts = {};
     const mediumServiceCounts = {};
     const highServiceCounts = {};
     const criticalServiceCounts = {};
@@ -160,12 +161,15 @@ function scanServices() {
         const service = entry.service.toLowerCase();
         if (!serviceCounts[service]) {
             serviceCounts[service] = 0;
+            lowServiceCounts[service] = 0;
             mediumServiceCounts[service] = 0;
             highServiceCounts[service] = 0;
             criticalServiceCounts[service] = 0;
         }
         serviceCounts[service]++;
-        if (entry.severity === 'medium') {
+        if (entry.severity === 'low') {
+            lowServiceCounts[service]++;
+        } else if (entry.severity === 'medium') {
             mediumServiceCounts[service]++;
         } else if (entry.severity === 'high') {
             highServiceCounts[service]++;
@@ -177,7 +181,7 @@ function scanServices() {
     console.log('Critical Service Counts:', criticalServiceCounts);
     servicesEntries = Object.keys(serviceCounts).map(service => ({
         service: service,
-        loggedEvents: serviceCounts[service],
+        loggedLowEvents: lowServiceCounts[service],
         loggedMediumEvents: mediumServiceCounts[service],
         loggedHighEvents: highServiceCounts[service],
         loggedCriticalEvents: criticalServiceCounts[service]
@@ -208,7 +212,7 @@ function output() {
     servicesTableHeader.innerHTML = '';
     servicesTableHeader.innerHTML = `
         <th>Service</th>
-        <th>Logged Events</th>
+        <th>Low Severity</th>
         <th>Medium Severity</th>
         <th>High Severity</th>
         <th>Critical Severity</th>
@@ -219,7 +223,7 @@ function output() {
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td onclick="showSearchResults({ service: '${entry.service}'})">${entry.service}</td>
-            <td onclick="showSearchResults({ service: '${entry.service}'})">${entry.loggedEvents}</td>
+            <td onclick="showSearchResults({ service: '${entry.service}', severity: 'low' })">${entry.loggedLowEvents}</td>
             <td onclick="showSearchResults({ service: '${entry.service}', severity: 'medium' })">${entry.loggedMediumEvents}</td>
             <td onclick="showSearchResults({ service: '${entry.service}', severity: 'high' })">${entry.loggedHighEvents}</td>
             <td onclick="showSearchResults({ service: '${entry.service}', severity: 'critical' })">${entry.loggedCriticalEvents}</td>
@@ -231,12 +235,14 @@ function output() {
     totalRow.classList.add('table-secondary');
     totalRow.innerHTML = `
         <td><b>Total</b></td>
-        <td><b>${logEntries.length}</b></td>
+        <td onclick="showSearchResults({ severity: 'low' })"><b>${servicesEntries.reduce((sum, entry) => sum + entry.loggedLowEvents, 0)}</b></td>
         <td onclick="showSearchResults({ severity: 'medium' })"><b>${servicesEntries.reduce((sum, entry) => sum + entry.loggedMediumEvents, 0)}</b></td>
         <td onclick="showSearchResults({ severity: 'high' })"><b>${servicesEntries.reduce((sum, entry) => sum + entry.loggedHighEvents, 0)}</b></td>
         <td onclick="showSearchResults({ severity: 'critical' })"><b>${servicesEntries.reduce((sum, entry) => sum + entry.loggedCriticalEvents, 0)}</b></td>
     `;
     servicesTableBody.appendChild(totalRow);
+
+    
 
     // Card Hints
     logStats.innerHTML = '';
@@ -259,13 +265,6 @@ function showSearchResults(query_obj) {
     const queryKeys = Object.keys(query_obj);
     const queryValues = queryKeys.map(key => query_obj[key].toLowerCase());
 
-    // Filter log entries based on the query
-    const filteredEntries = logEntries.filter(entry => {
-        return queryKeys.every((key, index) => {
-            return entry[key].toLowerCase().includes(queryValues[index]);
-        });
-    });
-
     const searchResultsHeader = document.getElementById('search-header');
     searchResultsHeader.innerHTML = logTableHeader.innerHTML; // Copy the log table header
 
@@ -282,7 +281,6 @@ function showSearchResults(query_obj) {
     if (columnIndices.includes(-1)) {
         console.warn(`Header for query keys "${queryKeys}" not found.`);
     } else {
-        // Filter rows based on the cell in the matched column
         const rows = searchResultsBody.querySelectorAll('tr');
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
@@ -297,4 +295,26 @@ function showSearchResults(query_obj) {
     }
 
     searchListModal.show();
+}
+
+function inputSearchBar() {
+    const searchInput = document.getElementById('search-input');
+    const searchQuery = searchInput.value.toLowerCase().trim();    
+
+    queryObj = {};
+
+    // Parse search query to queryObj (searchparm1=value1&searchparm2=value2)
+    searchQuery.split('&').forEach(param => {
+        if(param.includes('=')) {        
+            const [key, value] = param.split('=');
+            if (key && value) {
+                queryObj[key.trim()] = value.trim();
+            }
+        }else {
+            queryObj['message'] = param.trim(); // If no key is provided, assume it's a message search
+        }
+    });
+
+    showSearchResults(queryObj);
+    
 }
