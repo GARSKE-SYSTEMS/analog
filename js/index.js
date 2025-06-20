@@ -124,6 +124,35 @@ function scanSeverity(){
     logHeader.push('Severity');
 
     logEntries.forEach(entry => {
+
+        if(!entry.service) {
+            switch(logType) {
+                case "apache_access":
+                    entry.service = 'Apache2'; // Default service for apache access logs
+                    break;
+                default:
+                    entry.service = 'unknown'; // Default service if not provided
+                    break;
+            }
+        }
+
+        if(!entry.message) {
+            switch(logType) {
+                case "apache_access":
+                    entry.message = `HTTP ${entry.status} response from ${entry.ip} for ${entry.method} ${entry.path}`;
+                    if (!entry.method) {
+                        entry.method = 'GET'; // Default method if not provided
+                    }
+                    if (!entry.path) {
+                        entry.path = '/'; // Default path if not provided
+                    }
+                    break;
+                default:
+                    entry.message = "No message provided";
+            }
+        }
+
+
         entry.severity = severityLevels[0]; // Default to lowest severity
         if (entry.message.toLowerCase().includes("critical")) {
             entry.severity = 'critical';
@@ -152,6 +181,18 @@ function scanSeverity(){
                 } else if (msg.includes('notice')) {
                     entry.severity = 'low';
                 } else if (msg.includes('info')) {
+                    entry.severity = 'low';
+                }
+                break;
+            case "apache_access":
+                // Use HTTP status for severity
+                if (entry.status >= 500) {
+                    entry.severity = 'critical';
+                } else if (entry.status >= 400) {
+                    entry.severity = 'high';
+                } else if (entry.method && entry.method.toUpperCase() === 'POST') {
+                    entry.severity = 'medium';
+                } else {
                     entry.severity = 'low';
                 }
                 break;
@@ -380,6 +421,76 @@ function processSyslog() {
     cardHints.push({ title: 'Warning Events', value: warningEvents.length });
     const infoEvents = logEntries.filter(entry => entry.message.toLowerCase().includes('info'));
     cardHints.push({ title: 'Info Events', value: infoEvents.length });
+
+    scanSeverity();
+}
+
+function processApacheAccessLog() {
+    const logLines = logText.split('\n');
+    logEntries = [];
+
+    logLines.forEach(line => {
+        const tokens = line.match(/"[^"]*"|\[[^\]]*\]|\S+/g) || [];
+        let entry = {};
+        let quotedCount = 0;
+        let remaining = [];
+        tokens.forEach(token => {
+            if (token.startsWith('[') && token.endsWith(']')) {
+                entry.timestamp = token.slice(1, -1);
+            } else if (token.startsWith('"') && token.endsWith('"')) {
+                const content = token.slice(1, -1);
+                if (quotedCount === 0) {
+                    // request field
+                    const [method, path, protocol] = content.split(' ');
+                    entry.method = method;
+                    entry.path = path;
+                    entry.protocol = protocol;
+                } else if (quotedCount === 1) {
+                    entry.referrer = content !== '-' ? content : undefined;
+                } else if (quotedCount === 2) {
+                    entry.agent = content !== '-' ? content : undefined;
+                }
+                quotedCount++;
+            } else if (/^\d{3}$/.test(token)) {
+                entry.status = parseInt(token);
+            } else if (/^\d+$/.test(token) || token === '-') {
+                entry.bytes = token !== '-' ? token : undefined;
+            } else {
+                remaining.push(token);
+            }
+        });
+        // assign IP and user from remaining tokens
+        const ipRegex = /^(?:\d{1,3}\.){3}\d{1,3}$|^(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
+        remaining.forEach(val => {
+            if (!entry.ip && ipRegex.test(val)) {
+                entry.ip = val;
+            } else if (!entry.user) {
+                entry.user = val !== '-' ? val : undefined;
+            }
+        });
+        logEntries.push(entry);
+    });
+
+    // Build dynamic header
+    const allKeys = new Set(logEntries.flatMap(e => Object.keys(e)));
+    const order = ['ip','user','timestamp','method','path','protocol','status','bytes','referrer','agent'];
+    logHeader = order.filter(k => allKeys.has(k)).map(k => ({
+        ip:'IP', user:'User', timestamp:'Timestamp', method:'Method', path:'Path', protocol:'Protocol', status:'Status', bytes:'Bytes', referrer:'Referrer', agent:'Agent'
+    }[k]));
+    logHeader.push('Service'); // Add service column
+
+    // Notable statistics
+    cardHints.push({ title: 'Total Requests', value: logEntries.length });
+    const clientErrors = logEntries.filter(e => e.status >= 400 && e.status < 500).length;
+    const serverErrors = logEntries.filter(e => e.status >= 500).length;
+    const uniqueIPs = new Set(logEntries.map(e => e.ip)).size;
+    const pathsCount = {};
+    logEntries.forEach(e => { if(e.path) pathsCount[e.path] = (pathsCount[e.path] || 0) + 1; });
+    const topPaths = Object.entries(pathsCount).sort((a,b)=>b[1]-a[1]).slice(0,3).map(p=>p[0]).join(', ');
+    cardHints.push({ title: 'Client Errors (4xx)', value: clientErrors });
+    cardHints.push({ title: 'Server Errors (5xx)', value: serverErrors });
+    cardHints.push({ title: 'Unique IPs', value: uniqueIPs });
+    cardHints.push({ title: 'Top Paths', value: topPaths });
 
     scanSeverity();
 }
